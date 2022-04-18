@@ -260,7 +260,7 @@ public class PgDiffTables {
             ) {
         for (final PgColumn column : newTable.getColumns()) {
             if (!oldTable.containsColumn(column.getName())) {
-                statements.add("\tADD COLUMN "+ PgDiffUtils.getCreateIfNotExists()
+                statements.add("\t"+ PgDiffUtils.getCreateIfNotExists()
                         + column.getFullDefinition(arguments.isAddDefaults()));
                                 
                 if (arguments.isAddDefaults() && !column.getNullValue()
@@ -316,13 +316,15 @@ public class PgDiffTables {
             final String newColumnName =
                     PgDiffUtils.getQuotedName(newColumn.getName());
 
+            String prefix = "\t " + newColumnName + " ";
+            String suffix = "";
+            String statString = "";
             if (!oldColumn.getType().equals(newColumn.getType())) {
-                statements.add("\tALTER COLUMN " + newColumnName + " TYPE "
-                		+ newColumn.getType() + " USING " + newColumnName  + "::" + newColumn.getType() + " /* "
-                        + MessageFormat.format(
+                statString += newColumn.getType() + " ";
+                suffix += "/*" + MessageFormat.format(
                         Resources.getString("TypeParameterChange"),
                         newTable.getName(), oldColumn.getType(),
-                        newColumn.getType()) + " */");
+                        newColumn.getType()) + " */";
             }
             
             final String oldDefault = (oldColumn.getDefaultValue() == null) ? ""
@@ -332,18 +334,15 @@ public class PgDiffTables {
 
             if (!oldDefault.equals(newDefault)) {
                 if (newDefault.length() == 0) {
-                    statements.add("\tALTER COLUMN " + newColumnName
-                            + " DROP DEFAULT");
+                    statString += "DEFAULT NULL ";
                 } else {
-                    statements.add("\tALTER COLUMN " + newColumnName
-                            + " SET DEFAULT " + newDefault);
+                    statString += "DEFAULT " + newDefault + " ";
                 }
             }
 
             if (oldColumn.getNullValue() != newColumn.getNullValue()) {
                 if (newColumn.getNullValue()) {
-                    statements.add("\tALTER COLUMN " + newColumnName
-                            + " DROP NOT NULL");
+                    statString += "NULL ";
                 } else {
                     if (arguments.isAddDefaults()) {
                         final String defaultValue =
@@ -357,9 +356,11 @@ public class PgDiffTables {
                         }
                     }
 
-                    statements.add("\tALTER COLUMN " + newColumnName
-                            + " SET NOT NULL");
+                    statString += "NOT NULL ";
                 }
+            }
+            if (!statString.isEmpty()) {
+                statements.add(prefix + " " +statString + suffix);
             }
         }
     }
@@ -629,39 +630,50 @@ public class PgDiffTables {
             final PgDiffArguments arguments, final PgTable oldTable,
             final PgTable newTable, final SearchPathHelper searchPathHelper) {
         @SuppressWarnings("CollectionWithoutInitialCapacity")
-        final List<String> statements = new ArrayList<String>();
+        final List<String> addStatements = new ArrayList<String>();
+        final List<String> modifyStatements = new ArrayList<String>();
+        final List<String> dropColumnsStatements = new ArrayList<>();
         @SuppressWarnings("CollectionWithoutInitialCapacity")
         final List<PgColumn> dropDefaultsColumns = new ArrayList<PgColumn>();
         final List<PgColumn> generatedColumns = new ArrayList<PgColumn>();
-        addDropTableColumns(statements, oldTable, newTable);
+        addDropTableColumns(dropColumnsStatements, oldTable, newTable);
         addCreateTableColumns(
-                statements, arguments, oldTable, newTable, dropDefaultsColumns,generatedColumns);
+                addStatements, arguments, oldTable, newTable, dropDefaultsColumns, generatedColumns);
         addModifyTableColumns(
-                statements, arguments, oldTable, newTable, dropDefaultsColumns);
+                modifyStatements, arguments, oldTable, newTable, dropDefaultsColumns);
 
-        if (!statements.isEmpty()) {
+        if (!addStatements.isEmpty() || !modifyStatements.isEmpty()) {
             final String quotedTableName =
                     PgDiffUtils.getQuotedName(newTable.getName());
             searchPathHelper.outputSearchPath(writer);
             writer.println();
-            writer.println("ALTER " + ((newTable.isForeign()) ? "FOREIGN ":"") + "TABLE " + quotedTableName);
-
-            for (int i = 0; i < statements.size(); i++) {
-                writer.print(statements.get(i));
-                writer.println((i + 1) < statements.size() ? "," : ";");
+            if (!addStatements.isEmpty()) {
+                writer.println("ALTER " + ((newTable.isForeign()) ? "FOREIGN ":"") + "TABLE " + quotedTableName);
+                writer.println("\tADD (");
+                for (int i = 0; i < addStatements.size(); i++) {
+                    writer.print("\t" + addStatements.get(i));
+                    writer.println((i + 1) < addStatements.size() ? "," : ");");
+                }
+            }
+            if (!modifyStatements.isEmpty()) {
+                writer.println("ALTER " + ((newTable.isForeign()) ? "FOREIGN ":"") + "TABLE " + quotedTableName);
+                writer.println("\tMODIFY (");
+                for (int i = 0; i < modifyStatements.size(); i++) {
+                    writer.print("\t" + modifyStatements.get(i));
+                    writer.println((i + 1) < modifyStatements.size() ? "," : ");");
+                }
             }
 
             if (!dropDefaultsColumns.isEmpty()) {
                 writer.println();
                 writer.println("ALTER " + ((newTable.isForeign()) ? "FOREIGN ":"") + "TABLE " + quotedTableName);
-
+                writer.println("\tMODIFY (");
                 for (int i = 0; i < dropDefaultsColumns.size(); i++) {
-                    writer.print("\tALTER COLUMN ");
-                    writer.print(PgDiffUtils.getQuotedName(
+                    writer.print("\t" + PgDiffUtils.getQuotedName(
                             dropDefaultsColumns.get(i).getName()));
-                    writer.print(" DROP DEFAULT");
+                    writer.print(" DEFAULT NULL");
                     writer.println(
-                            (i + 1) < dropDefaultsColumns.size() ? "," : ";");
+                            (i + 1) < dropDefaultsColumns.size() ? "," : ");");
                 }
             }
             
@@ -673,6 +685,13 @@ public class PgDiffTables {
                         generatedColumns.get(i).getName()) + " " + generatedColumns.get(i).getGenerated() +";");
                
             }
+
+        }
+        for (int i = 0; i < dropColumnsStatements.size(); i++) {
+            writer.println();
+            writer.print("ALTER TABLE ");
+            writer.println(newTable.getName());
+            writer.println(dropColumnsStatements.get(i) +";");
         }
     }
 
